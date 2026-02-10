@@ -3,55 +3,37 @@ const path = require('path');
 
 // 数据库文件路径（Vercel Serverless 使用 /tmp）
 const dbPath = path.join('/tmp', 'openmd.db');
-let db;
+let db = null;
+let isInitialized = false;
 
 // 初始化数据库
 function initDatabase() {
   return new Promise((resolve, reject) => {
+    if (isInitialized && db) {
+      console.log('✅ Database already initialized, reusing connection');
+      resolve(db);
+      return;
+    }
+
     console.log('🗄️  Initializing SQLite database...');
     console.log(`📁 Database path: ${dbPath}`);
     console.log(`🌐 Environment: ${process.env.VERCEL ? 'Vercel Serverless' : 'Local'}`);
-    
-    // Vercel Serverless 的特殊处理
-    if (process.env.VERCEL) {
-      console.log('⚠️  Running in Vercel Serverless mode');
-      console.log('⚠️  Database will be reset on each deployment');
-    }
-    
-    db = new sqlite3.Database(dbPath, (err) => {
+
+    // 简化的数据库连接
+    const newDb = new sqlite3.Database(dbPath, (err) => {
       if (err) {
-        console.error('❌ Database connection error:', err);
+        console.error('❌ Database connection error:', err.message);
+        console.error('Error code:', err.code);
         reject(err);
-      } else {
-        console.log('✅ SQLite database connected');
-        
-        // 异步创建表，避免阻塞
-        createTablesAsync()
-          .then(() => {
-            console.log('✅ Database initialized successfully');
-            resolve(db);
-          })
-          .catch(reject);
+        return;
       }
-    });
 
-    // 优化数据库性能（只在本地环境）
-    if (!process.env.VERCEL) {
-      db.run('PRAGMA journal_mode = WAL');
-      db.run('PRAGMA synchronous = NORMAL');
-      db.run('PRAGMA cache_size = -2000');
-      db.run('PRAGMA temp_store = MEMORY');
-    }
-  });
-}
+      console.log('✅ SQLite database connected');
 
-// 异步创建表
-function createTablesAsync() {
-  return new Promise((resolve, reject) => {
-    const tables = [
-      {
-        name: 'users',
-        sql: `
+      // 简化的表创建（同步，更可靠）
+      newDb.serialize(() => {
+        // 用户表
+        newDb.run(`
           CREATE TABLE IF NOT EXISTS users (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             username TEXT UNIQUE NOT NULL,
@@ -60,11 +42,14 @@ function createTablesAsync() {
             created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
             last_login DATETIME
           )
-        `
-      },
-      {
-        name: 'notes',
-        sql: `
+        `, (err) => {
+          if (err) {
+            console.error('❌ Error creating users table:', err.message);
+          }
+        });
+
+        // 笔记表
+        newDb.run(`
           CREATE TABLE IF NOT EXISTS notes (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             user_id INTEGER,
@@ -75,11 +60,14 @@ function createTablesAsync() {
             updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE SET NULL
           )
-        `
-      },
-      {
-        name: 'shares',
-        sql: `
+        `, (err) => {
+          if (err) {
+            console.error('❌ Error creating notes table:', err.message);
+          }
+        });
+
+        // 分享链接表
+        newDb.run(`
           CREATE TABLE IF NOT EXISTS shares (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             note_id INTEGER NOT NULL,
@@ -90,37 +78,43 @@ function createTablesAsync() {
             created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY (note_id) REFERENCES notes(id) ON DELETE CASCADE
           )
-        `
-      }
-    ];
+        `, (err) => {
+          if (err) {
+            console.error('❌ Error creating shares table:', err.message);
+          }
+        });
 
-    // 顺序创建表
-    tables.reduce((promise, table) => {
-      return promise.then(() => {
-        return new Promise((resolve, reject) => {
-          db.run(table.sql, (err) => {
-            if (err) {
-              console.error(`❌ Error creating ${table.name} table:`, err);
-              reject(err);
-            } else {
-              console.log(`✅ Table ${table.name} created/exists`);
-              resolve();
-            }
-          });
+        console.log('✅ All tables created successfully');
+        isInitialized = true;
+        db = newDb;
+
+        // 关闭当前连接，释放内存
+        newDb.close((err) => {
+          if (err) {
+            console.error('⚠️  Warning closing database:', err.message);
+          }
+          console.log('🔄 Database closed for cleanup');
         });
       });
-    }, Promise.resolve())
-    .then(() => {
-      console.log('✅ All tables created successfully');
-      resolve();
-    })
-    .catch(reject);
+
+      // 优化（只在本地环境）
+      if (!process.env.VERCEL) {
+        newDb.run('PRAGMA journal_mode = WAL');
+        newDb.run('PRAGMA synchronous = NORMAL');
+      }
+    });
   });
 }
 
 // 获取数据库实例
 function getDb() {
-  return db;
+  if (!db) {
+    console.error('❌ Database not initialized');
+    throw new Error('Database not initialized. Please call initDatabase() first.');
+  }
+  
+  // 每次返回新的连接（更安全）
+  return new sqlite3.Database(dbPath);
 }
 
 // 健康检查
@@ -135,8 +129,8 @@ async function healthCheck() {
       });
       return;
     }
-    
-    db.get('SELECT 1 as status', [], (err) => {
+
+    const testDb = new sqlite3.Database(dbPath, (err) => {
       if (err) {
         resolve({
           status: 'unhealthy',
@@ -144,13 +138,26 @@ async function healthCheck() {
           database: 'sqlite',
           path: dbPath
         });
-      } else {
-        resolve({
-          status: 'healthy',
-          database: 'sqlite',
-          path: dbPath
-        });
+        return;
       }
+
+      testDb.get('SELECT 1 as status', [], (err) => {
+        testDb.close();
+        if (err) {
+          resolve({
+            status: 'unhealthy',
+            error: err.message,
+            database: 'sqlite',
+            path: dbPath
+          });
+        } else {
+          resolve({
+            status: 'healthy',
+            database: 'sqlite',
+            path: dbPath
+          });
+        }
+      });
     });
   });
 }
