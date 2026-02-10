@@ -789,7 +789,8 @@ app.get('/share/:code', async (req, res) => {
 
     function showMessage(text, type) {
       const messageDiv = document.getElementById('message');
-      messageDiv.innerHTML = `<div class="${type}">${text}</div>`;
+      const typeAttr = 'type';
+      messageDiv.innerHTML = '<div class="' + typeAttr + '">' + text + '</div>';
     }
   </script>
 </body>
