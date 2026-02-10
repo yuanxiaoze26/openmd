@@ -1,3 +1,5 @@
+require('dotenv').config();
+
 const express = require('express');
 const marked = require('marked');
 const cors = require('cors');
@@ -5,7 +7,7 @@ const path = require('path');
 const session = require('express-session');
 const bcrypt = require('bcryptjs');
 
-const { initDatabase, getDb } = require('./database');
+const { initDatabase, getDb, executeQuery, executeUpdate, healthCheck } = require('./database');
 const { registerUser, loginUser, getUserById } = require('./auth');
 
 const app = express();
@@ -17,10 +19,19 @@ async function startServer() {
   try {
     db = await initDatabase();
     console.log('✅ Database initialized');
+    
+    // 健康检查
+    const health = await healthCheck();
+    console.log('🏥 Database health:', health.status);
+    if (health.status === 'healthy') {
+      console.log(`📡 Host: ${health.host}, Database: ${health.database}`);
+    }
+    
     app.listen(PORT, () => {
       console.log(`🚀 OpenMD server running on port ${PORT}`);
       console.log(`📝 API: http://localhost:${PORT}/api/notes`);
       console.log(`🌐 Web: http://localhost:${PORT}`);
+      console.log(`🔐 Environment: ${process.env.NODE_ENV || 'development'}`);
     });
   } catch (err) {
     console.error('❌ Failed to start server:', err);
@@ -35,7 +46,7 @@ app.use(session({
   secret: 'openmd-secret-key-change-in-production',
   resave: false,
   saveUninitialized: false,
-  cookie: { maxAge: 7 * 24 * 60 * 60 * 1000 } // 7天
+  cookie: { maxAge: 7 * 24 * 60 * 60 * 1000, secure: process.env.NODE_ENV === 'production', sameSite: 'lax' }
 }));
 
 // 检查登录状态
@@ -117,8 +128,12 @@ app.post('/api/auth/logout', (req, res) => {
 app.get('/api/auth/me', requireAuth, async (req, res) => {
   try {
     const user = await getUserById(req.session.userId);
+    if (!user) {
+      return res.status(404).json({ error: '用户不存在' });
+    }
     res.json({ user });
   } catch (error) {
+    console.error('Error fetching user:', error);
     res.status(500).json({ error: '获取用户信息失败' });
   }
 });
@@ -137,58 +152,42 @@ app.post('/api/notes', async (req, res) => {
     const userId = req.session.userId || null;
     const metadataStr = JSON.stringify(metadata);
 
-    const db = getDb();
-    const stmt = db.prepare(
-      'INSERT INTO notes (user_id, title, content, metadata) VALUES (?, ?, ?, ?)'
+    const result = await executeUpdate(
+      'INSERT INTO notes (user_id, title, content, metadata) VALUES (?, ?, ?, ?)',
+      [userId, title || 'Untitled', content, metadataStr]
     );
 
-    stmt.run([userId, title || 'Untitled', content, metadataStr], function(err) {
-      if (err) {
-        console.error('Error creating note:', err);
-        return res.status(500).json({ error: '创建笔记失败' });
-      }
-
-      res.json({
-        id: this.lastID,
-        title: title || 'Untitled',
-        content,
-        metadata,
-        userId,
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString()
-      });
+    res.json({
+      id: result.insertId,
+      title: title || 'Untitled',
+      content,
+      metadata,
+      userId,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString()
     });
-
-    stmt.finalize();
   } catch (error) {
     console.error('Error creating note:', error);
-    res.status(500).json({ error: 'Internal server error' });
+    res.status(500).json({ error: error.message || 'Internal server error' });
   }
 });
 
 // 获取笔记
 app.get('/api/notes/:id', async (req, res) => {
   try {
-    const db = getDb();
-    db.get(
+    const rows = await executeQuery(
       'SELECT * FROM notes WHERE id = ?',
-      [req.params.id],
-      (err, note) => {
-        if (err) {
-          console.error('Error fetching note:', err);
-          return res.status(500).json({ error: '获取笔记失败' });
-        }
-
-        if (!note) {
-          return res.status(404).json({ error: 'Note not found' });
-        }
-
-        // 解析 metadata
-        note.metadata = note.metadata ? JSON.parse(note.metadata) : {};
-
-        res.json(note);
-      }
+      [req.params.id]
     );
+
+    if (!rows || rows.length === 0) {
+      return res.status(404).json({ error: 'Note not found' });
+    }
+
+    const note = rows[0];
+    note.metadata = note.metadata ? JSON.parse(note.metadata) : {};
+
+    res.json(note);
   } catch (error) {
     console.error('Error fetching note:', error);
     res.status(500).json({ error: 'Internal server error' });
@@ -199,125 +198,118 @@ app.get('/api/notes/:id', async (req, res) => {
 app.put('/api/notes/:id', async (req, res) => {
   try {
     const { title, content, metadata } = req.body;
-    const db = getDb();
 
-    db.get('SELECT * FROM notes WHERE id = ?', [req.params.id], (err, note) => {
-      if (err) {
-        return res.status(500).json({ error: '更新笔记失败' });
-      }
+    // 先查询笔记
+    const rows = await executeQuery(
+      'SELECT * FROM notes WHERE id = ?',
+      [req.params.id]
+    );
 
-      if (!note) {
-        return res.status(404).json({ error: 'Note not found' });
-      }
+    if (!rows || rows.length === 0) {
+      return res.status(404).json({ error: 'Note not found' });
+    }
 
-      // 如果有用户，检查权限
-      if (note.user_id && req.session.userId !== note.user_id) {
-        return res.status(403).json({ error: '无权修改此笔记' });
-      }
+    const note = rows[0];
 
-      const updates = [];
-      const values = [];
+    // 检查权限
+    if (note.user_id && req.session.userId && req.session.userId !== note.user_id) {
+      return res.status(403).json({ error: '无权修改此笔记' });
+    }
 
-      if (title !== undefined) {
-        updates.push('title = ?');
-        values.push(title);
-      }
-      if (content !== undefined) {
-        updates.push('content = ?');
-        values.push(content);
-      }
-      if (metadata !== undefined) {
-        updates.push('metadata = ?');
-        values.push(JSON.stringify(metadata));
-      }
+    // 构建更新
+    const updates = [];
+    const values = [];
 
-      updates.push('updated_at = CURRENT_TIMESTAMP');
-      values.push(req.params.id);
+    if (title !== undefined) {
+      updates.push('title = ?');
+      values.push(title);
+    }
+    if (content !== undefined) {
+      updates.push('content = ?');
+      values.push(content);
+    }
+    if (metadata !== undefined) {
+      updates.push('metadata = ?');
+      values.push(JSON.stringify(metadata));
+    }
 
-      db.run(
-        `UPDATE notes SET ${updates.join(', ')} WHERE id = ?`,
-        values,
-        function(err) {
-          if (err) {
-            return res.status(500).json({ error: '更新失败' });
-          }
+    if (updates.length === 0) {
+      return res.json({ success: true });
+    }
 
-          res.json({ success: true });
-        }
-      );
-    });
+    updates.push('updated_at = CURRENT_TIMESTAMP');
+    values.push(req.params.id);
+
+    await executeUpdate(
+      `UPDATE notes SET ${updates.join(', ')} WHERE id = ?`,
+      values
+    );
+
+    res.json({ success: true });
   } catch (error) {
     console.error('Error updating note:', error);
-    res.status(500).json({ error: 'Internal server error' });
-  }
-});
-
-// 列出所有笔记
-app.get('/api/notes', async (req, res) => {
-  try {
-    const db = getDb();
-
-    db.all(
-      'SELECT * FROM notes ORDER BY updated_at DESC LIMIT 100',
-      [],
-      (err, rows) => {
-        if (err) {
-          console.error('Error listing notes:', err);
-          return res.status(500).json({ error: '获取笔记列表失败' });
-        }
-
-        // 解析 metadata
-        const notes = rows.map(note => ({
-          ...note,
-          metadata: note.metadata ? JSON.parse(note.metadata) : {}
-        }));
-
-        res.json(notes);
-      }
-    );
-  } catch (error) {
-    console.error('Error listing notes:', error);
-    res.status(500).json({ error: 'Internal server error' });
+    res.status(500).json({ error: error.message || 'Internal server error' });
   }
 });
 
 // 删除笔记
 app.delete('/api/notes/:id', async (req, res) => {
   try {
-    const db = getDb();
-    db.run('DELETE FROM notes WHERE id = ?', [req.params.id], function(err) {
-      if (err) {
-        console.error('Error deleting note:', err);
-        return res.status(500).json({ error: '删除失败' });
-      }
+    // 先检查权限
+    const rows = await executeQuery(
+      'SELECT user_id FROM notes WHERE id = ?',
+      [req.params.id]
+    );
 
-      res.json({ success: true });
-    });
+    if (rows && rows.length > 0 && rows[0].user_id) {
+      if (req.session.userId && req.session.userId !== rows[0].user_id) {
+        return res.status(403).json({ error: '无权删除此笔记' });
+      }
+    }
+
+    await executeUpdate(
+      'DELETE FROM notes WHERE id = ?',
+      [req.params.id]
+    );
+
+    res.json({ success: true });
   } catch (error) {
     console.error('Error deleting note:', error);
-    res.status(500).json({ error: 'Internal server error' });
+    res.status(500).json({ error: error.message || 'Internal server error' });
+  }
+});
+
+// 列出所有笔记
+app.get('/api/notes', async (req, res) => {
+  try {
+    const rows = await executeQuery(
+      'SELECT * FROM notes ORDER BY updated_at DESC LIMIT 100'
+    );
+
+    // 解析 metadata
+    const notes = rows.map(note => ({
+      ...note,
+      metadata: note.metadata ? JSON.parse(note.metadata) : {}
+    }));
+
+    res.json(notes);
+  } catch (error) {
+    console.error('Error listing notes:', error);
+    res.status(500).json({ error: error.message || 'Internal server error' });
   }
 });
 
 // 列出所有用户
 app.get('/api/users', async (req, res) => {
   try {
-    const db = getDb();
-    db.all(
-      'SELECT id, username, email, created_at, last_login FROM users ORDER BY created_at DESC',
-      [],
-      (err, rows) => {
-        if (err) {
-          console.error('Error listing users:', err);
-          return res.status(500).json({ error: '获取用户列表失败' });
-        }
-
-        res.json(rows);
-      }
+    const rows = await executeQuery(
+      'SELECT id, username, email, created_at, last_login FROM users ORDER BY created_at DESC'
     );
+
+    res.json(rows);
   } catch (error) {
     console.error('Error listing users:', error);
-    res.status(500).json({ error: 'Internal server error' });
+    res.status(500).json({ error: error.message || 'Internal server error' });
   }
 });
 
@@ -333,130 +325,301 @@ app.post('/api/shares', async (req, res) => {
     }
 
     // 检查笔记是否存在
-    const db = getDb();
-    db.get('SELECT id FROM notes WHERE id = ?', [noteId], (err, note) => {
-      if (err) {
-        return res.status(500).json({ error: '数据库错误' });
-      }
+    const noteRows = await executeQuery(
+      'SELECT id FROM notes WHERE id = ?',
+      [noteId]
+    );
 
-      if (!note) {
-        return res.status(404).json({ error: '笔记不存在' });
-      }
+    if (!noteRows || noteRows.length === 0) {
+      return res.status(404).json({ error: '笔记不存在' });
+    }
 
-      // 生成分享码
-      const shareCode = generateShareCode();
-      
-      // 计算过期时间
-      let expiresAt = null;
-      if (expiresIn) {
-        const expiryDate = new Date();
-        expiryDate.setHours(expiryDate.getHours() + parseInt(expiresIn));
-        expiresAt = expiryDate.toISOString();
-      }
+    // 生成分享码
+    const shareCode = generateShareCode();
 
-      // 哈希密码
-      let passwordHash = null;
-      if (password) {
-        passwordHash = bcrypt.hashSync(password, 10);
-      }
+    // 计算过期时间
+    let expiresAt = null;
+    if (expiresIn) {
+      const expiryDate = new Date();
+      expiryDate.setHours(expiryDate.getHours() + parseInt(expiresIn));
+      expiresAt = expiryDate.toISOString();
+    }
 
-      const stmt = db.prepare(
-        'INSERT INTO shares (note_id, share_code, password, expires_at) VALUES (?, ?, ?, ?)'
-      );
+    // 哈希密码
+    const bcrypt = require('bcryptjs');
+    let passwordHash = null;
+    if (password) {
+      passwordHash = await bcrypt.hash(password, 10);
+    }
 
-      stmt.run([noteId, shareCode, passwordHash, expiresAt], function(err) {
-        if (err) {
-          console.error('Error creating share:', err);
-          return res.status(500).json({ error: '创建分享链接失败' });
-        }
+    await executeUpdate(
+      'INSERT INTO shares (note_id, share_code, password, expires_at) VALUES (?, ?, ?, ?)',
+      [noteId, shareCode, passwordHash, expiresAt]
+    );
 
-        res.json({
-          success: true,
-          shareCode,
-          shareUrl: `${req.protocol}://${req.get('host')}/share/${shareCode}`,
-          id: this.lastID
-        });
-      });
+    const protocol = req.protocol || 'http';
+    const host = req.get('host');
 
-      stmt.finalize();
+    res.json({
+      success: true,
+      shareCode,
+      shareUrl: `${protocol}://${host}/share/${shareCode}`,
+      id: noteRows[0].insertId
     });
   } catch (error) {
     console.error('Error creating share:', error);
-    res.status(500).json({ error: 'Internal server error' });
+    res.status(500).json({ error: error.message || 'Internal server error' });
   }
 });
 
 // 获取分享链接信息
 app.get('/api/shares/:code', async (req, res) => {
   try {
-    const db = getDb();
-    db.get(
+    const rows = await executeQuery(
       'SELECT * FROM shares WHERE share_code = ?',
-      [req.params.code],
-      (err, share) => {
-        if (err) {
-          return res.status(500).json({ error: '获取分享信息失败' });
-        }
-
-        if (!share) {
-          return res.status(404).json({ error: '分享链接不存在' });
-        }
-
-        // 检查是否过期
-        if (share.expires_at && new Date(share.expires_at) < new Date()) {
-          return res.status(410).json({ error: '分享链接已过期' });
-        }
-
-        res.json({
-          id: share.id,
-          shareCode: share.share_code,
-          hasPassword: !!share.password,
-          expiresAt: share.expires_at,
-          views: share.views,
-          createdAt: share.created_at
-        });
-      }
+      [req.params.code]
     );
+
+    if (!rows || rows.length === 0) {
+      return res.status(404).json({ error: '分享链接不存在' });
+    }
+
+    const share = rows[0];
+
+    // 检查是否过期
+    if (share.expires_at && new Date(share.expires_at) < new Date()) {
+      return res.status(410).json({ error: '分享链接已过期' });
+    }
+
+    res.json({
+      id: share.id,
+      shareCode: share.share_code,
+      hasPassword: !!share.password,
+      expiresAt: share.expires_at,
+      views: share.views,
+      createdAt: share.created_at
+    });
   } catch (error) {
     console.error('Error fetching share:', error);
-    res.status(500).json({ error: 'Internal server error' });
+    res.status(500).json({ error: error.message || 'Internal server error' });
+  }
+});
+
+// 解锁分享链接（验证密码）
+app.post('/api/shares/:code/unlock', async (req, res) => {
+  try {
+    const { password } = req.body;
+    const bcrypt = require('bcryptjs');
+
+    const rows = await executeQuery(
+      'SELECT * FROM shares WHERE share_code = ?',
+      [req.params.code]
+    );
+
+    if (!rows || rows.length === 0) {
+      return res.status(404).json({ error: '分享链接不存在' });
+    }
+
+    const share = rows[0];
+
+    // 验证密码
+    if (share.password) {
+      const isMatch = await bcrypt.compare(password, share.password);
+      if (!isMatch) {
+        return res.status(401).json({ error: '密码错误' });
+      }
+    }
+
+    // 标记为已解锁
+    if (!req.session.unlockedShares) {
+      req.session.unlockedShares = [];
+    }
+    req.session.unlockedShares.push(share.id);
+
+    res.json({ success: true });
+  } catch (error) {
+    console.error('Error unlocking share:', error);
+    res.status(500).json({ error: error.message || 'Internal server error' });
+  }
+});
+
+// ============ 页面路由 ============
+
+// 后台管理
+app.get('/admin', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'admin.html'));
+});
+
+// 注册页面
+app.get('/register', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'register.html'));
+});
+
+// 查看笔记
+app.get('/note/:id', async (req, res) => {
+  try {
+    const rows = await executeQuery(
+      'SELECT * FROM notes WHERE id = ?',
+      [req.params.id]
+    );
+
+    if (!rows || rows.length === 0) {
+      return res.status(404).send('Note not found');
+    }
+
+    const note = rows[0];
+    const metadata = note.metadata ? JSON.parse(note.metadata) : {};
+    const htmlContent = marked.parse(note.content);
+
+    res.send(`
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>${note.title} - OpenMD</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+      line-height: 1.6;
+      color: #333;
+      max-width: 800px;
+      margin: 0 auto;
+      padding: 20px;
+      background: #f5f5f5;
+    }
+    .container {
+      background: white;
+      padding: 40px;
+      border-radius: 8px;
+      box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+    }
+    h1 {
+      border-bottom: 2px solid #e0e0e0;
+      padding-bottom: 10px;
+      margin-bottom: 20px;
+      color: #2c3e50;
+    }
+    .metadata {
+      font-size: 0.85em;
+      color: #666;
+      margin-bottom: 20px;
+      padding: 10px;
+      background: #f8f9fa;
+      border-radius: 4px;
+    }
+    .markdown {
+      line-height: 1.8;
+    }
+    .markdown h2 {
+      margin-top: 30px;
+      margin-bottom: 15px;
+      color: #2c3e50;
+    }
+    .markdown p {
+      margin-bottom: 15px;
+    }
+    .markdown code {
+      background: #f0f4f8 !important;
+      color: #2c3e50 !important;
+      padding: 2px 6px;
+      border-radius: 3px;
+      font-family: 'Courier New', monospace;
+    }
+    .markdown pre {
+      background: #f0f4f8;
+      color: #2c3e50;
+      padding: 15px;
+      border-radius: 5px;
+      overflow-x: auto;
+      margin-bottom: 20px;
+      border: 1px solid #e0e6ed;
+    }
+    .markdown pre code {
+      background: transparent !important;
+      color: #2c3e50 !important;
+      padding: 0;
+    }
+    .markdown blockquote {
+      border-left: 4px solid #3498db;
+      padding-left: 15px;
+      margin: 20px 0;
+      color: #555;
+      font-style: italic;
+    }
+    .markdown ul, .markdown ol {
+      margin-bottom: 15px;
+      padding-left: 30px;
+    }
+    .markdown li {
+      margin-bottom: 8px;
+    }
+    .markdown a {
+      color: #3498db;
+      text-decoration: none;
+    }
+    .markdown a:hover {
+      text-decoration: underline;
+    }
+    .footer {
+      margin-top: 40px;
+      padding-top: 20px;
+      border-top: 1px solid #e0e0e0;
+      text-align: center;
+      color: #888;
+      font-size: 0.9em;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>${note.title}</h1>
+    <div class="metadata">
+      <p>Created: ${new Date(note.created_at).toLocaleString('zh-CN')}</p>
+      <p>Last Updated: ${new Date(note.updated_at).toLocaleString('zh-CN')}</p>
+      ${Object.entries(metadata || {}).map(([k, v]) => `<p>${k}: ${v}</p>`).join('')}
+    </div>
+    <div class="markdown">
+      ${htmlContent}
+    </div>
+    <div class="footer">
+      <p>🤖 Generated by OpenMD - AI-native note tool</p>
+    </div>
+  </div>
+</body>
+</html>
+    `);
+  } catch (error) {
+    console.error('Error rendering note:', error);
+    res.status(500).send('Error rendering note');
   }
 });
 
 // 查看分享的笔记
 app.get('/share/:code', async (req, res) => {
   try {
-    const db = getDb();
-
-    // 获取分享信息
-    db.get(
+    const shareRows = await executeQuery(
       'SELECT * FROM shares WHERE share_code = ?',
-      [req.params.code],
-      (err, share) => {
-        if (err) {
-          console.error('Error fetching share:', err);
-          return res.status(500).send('获取分享失败');
-        }
+      [req.params.code]
+    );
 
-        if (!share) {
-          return res.status(404).send('分享链接不存在');
-        }
+    if (!shareRows || shareRows.length === 0) {
+      return res.status(404).send('Share not found');
+    }
 
-        // 检查是否过期
-        if (share.expires_at && new Date(share.expires_at) < new Date()) {
-          return res.status(410).send('分享链接已过期');
-        }
+    const share = shareRows[0];
 
-        // 增加浏览次数
-        db.run(
-          'UPDATE shares SET views = views + 1 WHERE id = ?',
-          [share.id]
-        );
+    // 检查是否过期
+    if (share.expires_at && new Date(share.expires_at) < new Date()) {
+      return res.status(410).send('Share expired');
+    }
 
-        // 如果需要密码，返回密码输入页面
-        if (share.password) {
-          if (!req.session.unlockedShares || !req.session.unlockedShares.includes(share.id)) {
-            return res.send(`
+    // 如果需要密码，返回密码输入页面
+    const bcrypt = require('bcryptjs');
+    if (share.password) {
+      if (!req.session.unlockedShares || !req.session.unlockedShares.includes(share.id)) {
+        return res.send(`
 <!DOCTYPE html>
 <html lang="zh-CN">
 <head>
@@ -464,6 +627,7 @@ app.get('/share/:code', async (req, res) => {
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>密码保护 - OpenMD</title>
   <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
     body {
       font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
       display: flex;
@@ -482,91 +646,179 @@ app.get('/share/:code', async (req, res) => {
       width: 100%;
     }
     h1 {
-      color: #2c3e50;
-      margin-bottom: 20px;
       text-align: center;
+      color: #2c3e50;
+      margin-bottom: 10px;
+      font-size: 1.8rem;
+    }
+    .subtitle {
+      text-align: center;
+      color: #666;
+      margin-bottom: 30px;
+      font-size: 0.95rem;
     }
     .form-group {
       margin-bottom: 20px;
     }
+    label {
+      display: block;
+      margin-bottom: 8px;
+      font-weight: 600;
+      color: #2c3e50;
+      font-size: 0.95rem;
+    }
     input {
       width: 100%;
-      padding: 12px;
-      border: 1px solid #e0e0e0;
+      padding: 12px 15px;
+      border: 2px solid #e0e0e0;
       border-radius: 8px;
       font-size: 1rem;
+      transition: border-color 0.3s;
       box-sizing: border-box;
+    }
+    input:focus {
+      outline: none;
+      border-color: #667eea;
     }
     button {
       width: 100%;
       padding: 12px;
-      background: #667eea;
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
       color: white;
       border: none;
       border-radius: 8px;
       font-size: 1rem;
       font-weight: 600;
       cursor: pointer;
+      transition: all 0.3s;
+      margin-top: 10px;
     }
     button:hover {
-      background: #5568d3;
+      transform: translateY(-2px);
+      box-shadow: 0 5px 15px rgba(102, 126, 234, 0.3);
     }
     .error {
-      color: #ef4444;
-      margin-top: 10px;
+      background: #fee;
+      border: 1px solid #fcc;
+      color: #c33;
+      padding: 12px;
+      border-radius: 6px;
+      margin-bottom: 20px;
       text-align: center;
+    }
+    .success {
+      background: #efe;
+      border: 1px solid #cfc;
+      color: #3c3;
+      padding: 12px;
+      border-radius: 6px;
+      margin-bottom: 20px;
+      text-align: center;
+    }
+    .login-link {
+      text-align: center;
+      margin-top: 20px;
+      color: #666;
+      font-size: 0.9rem;
+    }
+    .login-link a {
+      color: #667eea;
+      text-decoration: none;
+      font-weight: 600;
+    }
+    .login-link a:hover {
+      text-decoration: underline;
+    }
+    .requirements {
+      font-size: 0.85rem;
+      color: #999;
+      margin-top: 5px;
     }
   </style>
 </head>
 <body>
   <div class="container">
-    <h1>🔒 密码保护</h1>
+    <h1>📝 密码保护</h1>
+    <p class="subtitle">请输入密码查看笔记</p>
+
+    <div id="message"></div>
+
     <div class="form-group">
+      <label>密码</label>
       <input type="password" id="password" placeholder="请输入密码">
     </div>
+
     <button onclick="unlock()">解锁</button>
-    <div id="error" class="error"></div>
+
+    <div class="login-link">
+      返回 <a href="/admin">后台</a>
+    </div>
   </div>
+
   <script>
     async function unlock() {
       const password = document.getElementById('password').value;
-      const response = await fetch('/api/shares/${share.share_code}/unlock', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ password })
-      });
-      const data = await response.json();
-      if (data.success) {
-        location.reload();
-      } else {
-        document.getElementById('error').textContent = data.error;
+
+      if (!password) {
+        showMessage('请输入密码', 'error');
+        return;
       }
+
+      try {
+        const response = await fetch('/api/shares/${location.pathname.split('/').pop()}/unlock', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ password })
+        });
+
+        const data = await response.json();
+
+        if (data.success) {
+          showMessage('解锁成功，正在跳转...', 'success');
+          setTimeout(() => {
+            location.reload();
+          }, 1000);
+        } else {
+          showMessage(data.error || '解锁失败', 'error');
+        }
+      } catch (error) {
+        console.error('Unlock error:', error);
+        showMessage('网络错误，请稍后重试', 'error');
+      }
+    }
+
+    function showMessage(text, type) {
+      const messageDiv = document.getElementById('message');
+      messageDiv.innerHTML = `<div class="${type}">${text}</div>`;
     }
   </script>
 </body>
 </html>
-            `);
-          }
-        }
+        `);
+      }
+    }
 
-        // 获取笔记内容
-        db.get(
-          'SELECT * FROM notes WHERE id = ?',
-          [share.note_id],
-          (err, note) => {
-            if (err) {
-              console.error('Error fetching note:', err);
-              return res.status(500).send('获取笔记失败');
-            }
+    // 获取笔记内容
+    const noteRows = await executeQuery(
+      'SELECT * FROM notes WHERE id = ?',
+      [share.note_id]
+    );
 
-            if (!note) {
-              return res.status(404).send('笔记不存在');
-            }
+    if (!noteRows || noteRows.length === 0) {
+      return res.status(404).send('Note not found');
+    }
 
-            const metadata = note.metadata ? JSON.parse(note.metadata) : {};
-            const htmlContent = marked.parse(note.content);
+    const note = noteRows[0];
+    const metadata = note.metadata ? JSON.parse(note.metadata) : {};
+    const htmlContent = marked.parse(note.content);
 
-            res.send(`
+    // 增加浏览次数
+    await executeUpdate(
+      'UPDATE shares SET views = views + 1 WHERE id = ?',
+      [share.id]
+    );
+
+    res.send(`
 <!DOCTYPE html>
 <html lang="zh-CN">
 <head>
@@ -595,75 +847,6 @@ app.get('/share/:code', async (req, res) => {
       padding-bottom: 10px;
       margin-bottom: 20px;
       color: #2c3e50;
-    }
-    .metadata {
-      font-size: 0.85em;
-      color: #666;
-      margin-bottom: 20px;
-      padding: 10px;
-      background: #f8f9fa;
-      border-radius: 4px;
-    }
-    .markdown {
-      line-height: 1.8;
-    }
-    .markdown h2 {
-      margin-top: 30px;
-      margin-bottom: 15px;
-      color: #2c3e50;
-    }
-    .markdown p {
-      margin-bottom: 15px;
-    }
-    .markdown code {
-      background: #f0f4f8 !important;
-      color: #2c3e50 !important;
-      padding: 2px 6px;
-      border-radius: 3px;
-      font-family: 'Courier New', monospace;
-    }
-    .markdown pre {
-      background: #f0f4f8;
-      color: #2c3e50;
-      padding: 15px;
-      border-radius: 5px;
-      overflow-x: auto;
-      margin-bottom: 20px;
-      border: 1px solid #e0e6ed;
-    }
-    .markdown pre code {
-      background: transparent !important;
-      color: #2c3e50 !important;
-      padding: 0;
-    }
-    .markdown blockquote {
-      border-left: 4px solid #3498db;
-      padding-left: 15px;
-      margin: 20px 0;
-      color: #555;
-      font-style: italic;
-    }
-    .markdown ul, .markdown ol {
-      margin-bottom: 15px;
-      padding-left: 30px;
-    }
-    .markdown li {
-      margin-bottom: 8px;
-    }
-    .markdown a {
-      color: #3498db;
-      text-decoration: none;
-    }
-    .markdown a:hover {
-      text-decoration: underline;
-    }
-    .footer {
-      margin-top: 40px;
-      padding-top: 20px;
-      border-top: 1px solid #e0e0e0;
-      text-align: center;
-      color: #888;
-      font-size: 0.9em;
     }
     .share-info {
       background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
@@ -672,149 +855,12 @@ app.get('/share/:code', async (req, res) => {
       border-radius: 8px;
       margin-bottom: 20px;
     }
-  </style>
-</head>
-<body>
-  <div class="container">
-    <div class="share-info">
-      <p>🔗 通过 OpenMD 分享</p>
-      <p style="font-size: 0.85em; opacity: 0.9;">浏览次数：${share.views}</p>
-    </div>
-    <h1>${note.title}</h1>
-    <div class="metadata">
-      <p>Created: ${new Date(note.created_at).toLocaleString('zh-CN')}</p>
-      <p>Last Updated: ${new Date(note.updated_at).toLocaleString('zh-CN')}</p>
-      ${Object.entries(metadata || {}).map(([k, v]) => `<p>${k}: ${v}</p>`).join('')}
-    </div>
-    <div class="markdown">
-      ${htmlContent}
-    </div>
-    <div class="footer">
-      <p>🤖 Generated by OpenMD - AI-native note tool</p>
-    </div>
-  </div>
-</body>
-</html>
-            `);
-          }
-        );
-      }
-    );
-  } catch (error) {
-    console.error('Error rendering share:', error);
-    res.status(500).send('Error rendering share');
-  }
-});
-
-// 解锁分享链接（验证密码）
-app.post('/api/shares/:code/unlock', async (req, res) => {
-  try {
-    const { password } = req.body;
-    const db = getDb();
-
-    db.get(
-      'SELECT * FROM shares WHERE share_code = ?',
-      [req.params.code],
-      (err, share) => {
-        if (err) {
-          return res.status(500).json({ error: '数据库错误' });
-        }
-
-        if (!share) {
-          return res.status(404).json({ error: '分享链接不存在' });
-        }
-
-        // 验证密码
-        if (share.password) {
-          bcrypt.compare(password, share.password, (err, isMatch) => {
-            if (err) {
-              return res.status(500).json({ error: '验证失败' });
-            }
-
-            if (!isMatch) {
-              return res.status(401).json({ error: '密码错误' });
-            }
-
-            // 标记为已解锁
-            if (!req.session.unlockedShares) {
-              req.session.unlockedShares = [];
-            }
-            req.session.unlockedShares.push(share.id);
-
-            res.json({ success: true });
-          });
-        } else {
-          res.json({ success: true });
-        }
-      }
-    );
-  } catch (error) {
-    console.error('Error unlocking share:', error);
-    res.status(500).json({ error: 'Internal server error' });
-  }
-});
-
-// ============ 页面路由 ============
-
-// 注册页面
-app.get('/register', (req, res) => {
-  res.sendFile(path.join(__dirname, 'public', 'register.html'));
-});
-
-// 后台管理
-app.get('/admin', (req, res) => {
-  res.sendFile(path.join(__dirname, 'public', 'admin.html'));
-});
-
-// 查看笔记
-app.get('/note/:id', async (req, res) => {
-  try {
-    const db = getDb();
-    db.get(
-      'SELECT * FROM notes WHERE id = ?',
-      [req.params.id],
-      (err, note) => {
-        if (err) {
-          console.error('Error rendering note:', err);
-          return res.status(500).send('Error rendering note');
-        }
-
-        if (!note) {
-          return res.status(404).send('Note not found');
-        }
-
-        const metadata = note.metadata ? JSON.parse(note.metadata) : {};
-        const htmlContent = marked.parse(note.content);
-
-        res.send(`
-<!DOCTYPE html>
-<html lang="zh-CN">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>${note.title} - OpenMD</title>
-  <style>
-    * { margin: 0; padding: 0; box-sizing: border-box; }
-    body {
-      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
-      line-height: 1.6;
-      color: #333;
-      max-width: 800px;
-      margin: 0 auto;
-      padding: 20px;
-      background: #f5f5f5;
+    .share-info p {
+      margin: 0;
+      font-size: 0.95em;
     }
-    .container {
-      background: white;
-      padding: 40px;
-      border-radius: 8px;
-      box-shadow: 0 2px 10px rgba(0,0,0,0.1);
-    }
-    h1 {
-      border-bottom: 2px solid #e0e0e0;
-      padding-bottom: 10px;
-      margin-bottom: 20px;
-      color: #2c3e50;
+    .share-info strong {
+      font-size: 1.1em;
     }
     .metadata {
       font-size: 0.85em;
@@ -889,6 +935,11 @@ app.get('/note/:id', async (req, res) => {
 </head>
 <body>
   <div class="container">
+    <div class="share-info">
+      <p>🔗 通过 OpenMD 分享</p>
+      <p><strong>浏览次数：</strong>${share.views}</p>
+    </div>
+
     <h1>${note.title}</h1>
     <div class="metadata">
       <p>Created: ${new Date(note.created_at).toLocaleString('zh-CN')}</p>
@@ -904,21 +955,20 @@ app.get('/note/:id', async (req, res) => {
   </div>
 </body>
 </html>
-        `);
-      }
-    );
+    `);
   } catch (error) {
-    console.error('Error rendering note:', error);
-    res.status(500).send('Error rendering note');
+    console.error('Error rendering share:', error);
+    res.status(500).send('Error rendering share');
   }
 });
 
 // 首页
 app.get('/', (req, res) => {
-  const db = getDb();
-
-  db.all('SELECT * FROM notes ORDER BY updated_at DESC LIMIT 10', [], (err, notes) => {
-    const allNotes = notes.map(note => ({
+  executeQuery(
+    'SELECT * FROM notes ORDER BY updated_at DESC LIMIT 10',
+    []
+  ).then(allNotes => {
+    const notes = allNotes.map(note => ({
       ...note,
       metadata: note.metadata ? JSON.parse(note.metadata) : {}
     }));
@@ -1115,7 +1165,7 @@ app.get('/', (req, res) => {
       <p class="tagline">AI-native note tool - Designed for Agents, read by humans</p>
       <div class="stats">
         <div class="stat">
-          <span class="stat-number">${allNotes.length}</span>
+          <span class="stat-number">${notes.length}</span>
           <span class="stat-label">笔记总数</span>
         </div>
       </div>
@@ -1149,9 +1199,9 @@ app.get('/', (req, res) => {
 
     <div class="section">
       <h2 class="section-title">📋 最近的笔记</h2>
-      ${allNotes.length > 0 ? `
+      ${notes.length > 0 ? `
         <div class="notes-list">
-          ${allNotes.map(note => `
+          ${notes.map(note => `
             <a href="/note/${note.id}" class="note-card">
               <div class="note-title">${note.title}</div>
               <div class="note-meta">
@@ -1176,7 +1226,20 @@ app.get('/', (req, res) => {
 </body>
 </html>
     `);
+  }).catch(err => {
+    console.error('Error listing notes:', err);
+    res.send('Error loading notes');
   });
+});
+
+// 健康检查
+app.get('/api/health', async (req, res) => {
+  try {
+    const health = await healthCheck();
+    res.json(health);
+  } catch (error) {
+    res.status(500).json({ status: 'unhealthy', error: error.message });
+  }
 });
 
 // 启动服务器
