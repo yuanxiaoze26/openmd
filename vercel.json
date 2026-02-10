@@ -1,0 +1,30 @@
+{
+  "version": 2,
+  "builds": [
+    {
+      "src": "server.js",
+      "use": "@vercel/node"
+    }
+  ],
+  "routes": [
+    {
+      "src": "/(.*)",
+      "dest": "/index.js"
+    }
+  ],
+  "env": {
+    "DB_TYPE": "mysql",
+    "DB_HOST": "182.92.238.143",
+    "DB_PORT": "9001",
+    "DB_NAME": "openmd",
+    "DB_USER": "openmd",
+    "DB_PASSWORD": "eo0IGu59U86SzEyl"
+  },
+  "functions": {
+    "api/index.js": {
+      "memory": 1024,
+      "maxDuration": 10
+    }
+  },
+  "buildCommand": "npm install"
+}

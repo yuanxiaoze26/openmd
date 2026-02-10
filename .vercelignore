@@ -1,0 +1,30 @@
+# 依赖
+node_modules
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# 数据库文件
+*.db
+*.sqlite
+*.sqlite3
+openmd.db
+
+# 环境变量
+.env
+.env.local
+.env.*.local
+
+# Vercel
+.vercel
+
+# IDE
+.vscode
+.idea
+.DS_Store
+*.swp
+*.swo
+
+# 日志
+logs
+*.log
