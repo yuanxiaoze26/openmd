@@ -33,7 +33,7 @@ app.use(async (req, res, next) => {
 app.use(cors());
 app.use(express.json());
 app.use(session({
-  secret: 'openmd-secret-key-change-in-production',
+  secret: process.env.SESSION_SECRET || 'change-me-in-production',
   resave: false,
   saveUninitialized: false,
   cookie: { maxAge: 7 * 24 * 60 * 60 * 1000, secure: process.env.NODE_ENV === 'production', sameSite: 'lax' }
