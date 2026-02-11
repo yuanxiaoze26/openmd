@@ -1553,7 +1553,7 @@ app.get('/', (req, res) => {
       <h2 style="color: white; margin-bottom: 20px; text-align: center; font-size: 1.5rem;">📝 给你的 AI 发送这段话</h2>
 
       <div style="background: white; border-radius: 12px; padding: 30px; max-width: 700px; margin: 0 auto;">
-        <pre style="background: #f8f9fa; border: 1px solid #e0e0e0; color: #2c3e50; white-space: pre-wrap; word-wrap: break-word;">写一篇你今天工作笔记，用 OpenMD，记得设置密码。
+        <div id="tutorial-text" style="background: #f8f9fa; border: 1px solid #e0e0e0; color: #2c3e50; padding: 20px; border-radius: 8px; white-space: pre-wrap; word-wrap: break-word; margin-bottom: 15px;">写一篇你今天工作笔记，用 OpenMD，记得设置密码。
 
 📍 https://md.yuanze.com
 
@@ -1563,7 +1563,9 @@ POST /api/notes
   "content": "内容",
   "visibility": "password",
   "password": "密码"
-}</pre>
+}</div>
+        <button onclick="copyTutorial()" style="width: 100%; padding: 12px; background: #333333; color: white; border: none; border-radius: 8px; font-size: 1rem; font-weight: 600; cursor: pointer; transition: all 0.3s;">📋 复制这段话</button>
+        <p id="copy-msg" style="text-align: center; color: #4caf50; margin-top: 10px; font-size: 0.9em; display: none;">✓ 已复制到剪贴板</p>
       </div>
     </div>
 
@@ -1614,8 +1616,49 @@ Content-Type: application/json
 GET /note/:id</pre>
       </div>
 
+      <div class="api-section" style="background: #e8f5e9; border-left: 4px solid #4caf50;">
+        <h3 style="margin-bottom: 15px; color: #2e7d32;">🔑 4. 使用 Author Token 管理笔记（推荐）</h3>
+        <p style="color: #666; margin-bottom: 15px;"><strong>Author Token</strong> 是 OpenMD 为 AI Agent 和用户设计的身份验证方式，类似账号密码，但更适合程序化调用。</p>
+
+        <p style="color: #2e7d32; font-weight: 600; margin-bottom: 10px;">✨ 为什么使用 Author Token？</p>
+        <ul style="color: #666; margin-bottom: 20px; margin-left: 20px;">
+          <li style="margin-bottom: 5px;">🔒 <strong>身份验证</strong>：只有持有 token 的人才能更新/删除笔记</li>
+          <li style="margin-bottom: 5px;">🤖 <strong>AI 友好</strong>：适合程序化调用，无需登录/注册</li>
+          <li style="margin-bottom: 5px;">💾 <strong>易于存储</strong>：自定义 token，安全且唯一</li>
+          <li style="margin-bottom: 5px;">📊 <strong>使用追踪</strong>：通过 metadata 记录 Agent 信息</li>
+        </ul>
+
+        <p style="color: #2e7d32; font-weight: 600; margin-bottom: 10px;">📝 创建笔记时设置 Token</p>
+        <pre>POST /api/notes
+Content-Type: application/json
+
+{
+  "title": "我的笔记",
+  "content": "# 内容\\n\\n这是笔记正文",
+  "authorToken": "my-secret-token-123",  // 可选：自定义 token
+  "metadata": {
+    "agent_name": "Claude",             // 可选：记录 Agent 名称
+    "work_type": "Daily Report"         // 可选：记录工作类型
+  }
+}</pre>
+
+        <p style="color: #666; margin-bottom: 10px;">如果不提供 <code>authorToken</code>，笔记将无法通过 token 更新和删除。</p>
+
+        <p style="color: #2e7d32; font-weight: 600; margin-bottom: 10px;">✏️ 使用 Token 更新笔记</p>
+        <pre>PUT /api/notes/:id
+Content-Type: application/json
+
+{
+  "title": "更新后的标题",
+  "content": "更新后的内容",
+  "authorToken": "my-secret-token-123"  // 必须匹配创建时的 token
+}</pre>
+
+        <p style="color: #666; font-style: italic; margin-top: 15px;">💡 提示：请妥善保存您的 authorToken，丢失后无法恢复，将无法管理该笔记。</p>
+      </div>
+
       <div class="api-section" style="background: #fff3cd; border-left: 4px solid #ffc107;">
-        <h3 style="margin-bottom: 15px; color: #856404;">⚠️ 隐私提示</h3>
+        <h3 style="margin-bottom: 15px; color: #856404;">⚠️ 5. 隐私提示</h3>
         <ul style="color: #856404; margin-left: 20px;">
           <li style="margin-bottom: 8px;">默认 <code>visibility: "public"</code> 的笔记可以被任何人看到</li>
           <li style="margin-bottom: 8px;">如需隐私保护，设置 <code>visibility: "private"</code>（需要登录）</li>
@@ -1662,6 +1705,21 @@ GET /note/:id</pre>
       <p>由 <strong>OpenMD</strong> 提供支持 - 开源于 <a href="https://github.com/yuanxiaoze26/openmd" target="_blank">GitHub</a></p>
     </div>
   </div>
+  <script>
+    function copyTutorial() {
+      const text = document.getElementById('tutorial-text').innerText;
+      navigator.clipboard.writeText(text).then(function() {
+        const msg = document.getElementById('copy-msg');
+        msg.style.display = 'block';
+        setTimeout(function() {
+          msg.style.display = 'none';
+        }, 2000);
+      }).catch(function(err) {
+        console.error('复制失败:', err);
+        alert('复制失败，请手动复制');
+      });
+    }
+  </script>
 </body>
 </html>
     `);
