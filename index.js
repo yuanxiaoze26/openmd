@@ -169,7 +169,7 @@ app.get('/api/auth/me', requireAuth, async (req, res) => {
 // 创建笔记
 app.post('/api/notes', async (req, res) => {
   try {
-    const { title, content, metadata = {}, visibility = 'public', password, expiresIn } = req.body;
+    const { title, content, metadata = {}, visibility = 'public', password, expiresIn, authorToken } = req.body;
 
     if (!content) {
       return res.status(400).json({ error: 'Content is required' });
@@ -204,8 +204,8 @@ app.post('/api/notes', async (req, res) => {
     }
 
     const result = await executeUpdate(
-      'INSERT INTO notes (user_id, title, content, metadata, visibility, password, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
-      [userId, title || 'Untitled', content, metadataStr, visibility, passwordHash, expiresAt]
+      'INSERT INTO notes (user_id, title, content, metadata, visibility, password, expires_at, author_token) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+      [userId, title || 'Untitled', content, metadataStr, visibility, passwordHash, expiresAt, authorToken || null]
     );
 
     res.json({
@@ -215,6 +215,7 @@ app.post('/api/notes', async (req, res) => {
       metadata,
       visibility,
       userId,
+      authorToken: authorToken ? authorToken.substring(0, 8) + '...' : null,
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString()
     });
@@ -278,7 +279,7 @@ app.get('/api/notes/:id', async (req, res) => {
 // 更新笔记
 app.put('/api/notes/:id', async (req, res) => {
   try {
-    const { title, content, metadata } = req.body;
+    const { title, content, metadata, authorToken } = req.body;
 
     // 先查询笔记
     const rows = await executeQuery(
@@ -292,8 +293,25 @@ app.put('/api/notes/:id', async (req, res) => {
 
     const note = rows[0];
 
-    // 检查权限
-    if (note.user_id && req.session.userId && req.session.userId !== note.user_id) {
+    // 审计日志
+    console.log('🔍 [AUDIT] Update attempt:', {
+      timestamp: new Date().toISOString(),
+      noteId: req.params.id,
+      noteTitle: note.title,
+      ip: req.ip || req.headers['x-forwarded-for'] || 'unknown',
+      providedToken: authorToken ? authorToken.substring(0, 8) + '...' : 'none',
+      noteHasToken: !!note.author_token,
+      noteHasUserId: !!note.user_id
+    });
+
+    // 检查权限 - authorToken 优先
+    if (note.author_token) {
+      if (!authorToken || authorToken !== note.author_token) {
+        console.log('🔍 [AUDIT] Rejected: Token mismatch or missing');
+        return res.status(403).json({ error: '无权修改此笔记：authorToken 不正确或未提供' });
+      }
+      console.log('🔍 [AUDIT] Approved: Token matched');
+    } else if (note.user_id && req.session.userId && req.session.userId !== note.user_id) {
       return res.status(403).json({ error: '无权修改此笔记' });
     }
 
@@ -465,6 +483,43 @@ app.get('/api/users', async (req, res) => {
     res.json(rows);
   } catch (error) {
     console.error('Error listing users:', error);
+    res.status(500).json({ error: error.message || 'Internal server error' });
+  }
+});
+
+// Token 比较API - 检查两个笔记是否使用相同的 token
+app.get('/api/notes/:id1/same-token/:id2', async (req, res) => {
+  try {
+    const rows = await executeQuery(
+      'SELECT id, author_token FROM notes WHERE id IN (?, ?)',
+      [req.params.id1, req.params.id2]
+    );
+
+    if (!rows || rows.length < 2) {
+      return res.status(404).json({ error: '一个或两个笔记不存在' });
+    }
+
+    const note1 = rows.find(r => r.id == req.params.id1);
+    const note2 = rows.find(r => r.id == req.params.id2);
+
+    const sameToken = note1.author_token === note2.author_token;
+
+    res.json({
+      note1: {
+        id: note1.id,
+        hasToken: !!note1.author_token,
+        tokenPrefix: note1.author_token ? note1.author_token.substring(0, 8) + '...' : null
+      },
+      note2: {
+        id: note2.id,
+        hasToken: !!note2.author_token,
+        tokenPrefix: note2.author_token ? note2.author_token.substring(0, 8) + '...' : null
+      },
+      sameToken,
+      conclusion: sameToken ? '⚠️ 两个笔记使用相同的 Token！' : '✅ 两个笔记使用不同的 Token，各自独立保护。'
+    });
+  } catch (error) {
+    console.error('Error comparing tokens:', error);
     res.status(500).json({ error: error.message || 'Internal server error' });
   }
 });
@@ -726,15 +781,45 @@ app.get('/note/:id', async (req, res) => {
       color: #888;
       font-size: 0.9em;
     }
+    @media (max-width: 768px) {
+      body {
+        padding: 15px;
+      }
+      .container {
+        padding: 20px 15px;
+      }
+      h1 {
+        font-size: 1.5rem;
+      }
+      .markdown {
+        overflow-wrap: break-word;
+        word-wrap: break-word;
+      }
+      .markdown code {
+        word-wrap: break-word;
+        overflow-wrap: break-word;
+      }
+      .markdown pre {
+        max-width: 100%;
+        overflow-x: auto;
+      }
+      .markdown pre code {
+        white-space: pre-wrap;
+        word-wrap: break-word;
+      }
+    }
   </style>
 </head>
 <body>
   <div class="container">
     <h1>${note.title}</h1>
     <div class="metadata">
-      <p>Created: ${new Date(note.created_at).toLocaleString('zh-CN')}</p>
-      <p>Last Updated: ${new Date(note.updated_at).toLocaleString('zh-CN')}</p>
-      ${Object.entries(metadata || {}).map(([k, v]) => `<p>${k}: ${v}</p>`).join('')}
+      <p>📅 创建时间：${new Date(note.created_at).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' })}</p>
+      ${metadata.recorded_by ? `<p>🤖 记录者：${metadata.recorded_by}</p>` : ''}
+      ${metadata.work_type ? `<p>📝 类型：${metadata.work_type}</p>` : ''}
+      ${Object.entries(metadata || {})
+        .filter(([k]) => !['recorded_by', 'work_type'].includes(k))
+        .map(([k, v]) => `<p>📋 ${k}: ${v}</p>`).join('')}
     </div>
     <div class="markdown">
       ${htmlContent}
@@ -1088,6 +1173,33 @@ app.get('/share/:code', async (req, res) => {
       color: #888;
       font-size: 0.9em;
     }
+    @media (max-width: 768px) {
+      body {
+        padding: 15px;
+      }
+      .container {
+        padding: 20px 15px;
+      }
+      h1 {
+        font-size: 1.5rem;
+      }
+      .markdown {
+        overflow-wrap: break-word;
+        word-wrap: break-word;
+      }
+      .markdown code {
+        word-wrap: break-word;
+        overflow-wrap: break-word;
+      }
+      .markdown pre {
+        max-width: 100%;
+        overflow-x: auto;
+      }
+      .markdown pre code {
+        white-space: pre-wrap;
+        word-wrap: break-word;
+      }
+    }
   </style>
 </head>
 <body>
@@ -1099,9 +1211,12 @@ app.get('/share/:code', async (req, res) => {
 
     <h1>${note.title}</h1>
     <div class="metadata">
-      <p>Created: ${new Date(note.created_at).toLocaleString('zh-CN')}</p>
-      <p>Last Updated: ${new Date(note.updated_at).toLocaleString('zh-CN')}</p>
-      ${Object.entries(metadata || {}).map(([k, v]) => `<p>${k}: ${v}</p>`).join('')}
+      <p>📅 创建时间：${new Date(note.created_at).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' })}</p>
+      ${metadata.recorded_by ? `<p>🤖 记录者：${metadata.recorded_by}</p>` : ''}
+      ${metadata.work_type ? `<p>📝 类型：${metadata.work_type}</p>` : ''}
+      ${Object.entries(metadata || {})
+        .filter(([k]) => !['recorded_by', 'work_type'].includes(k))
+        .map(([k, v]) => `<p>📋 ${k}: ${v}</p>`).join('')}
     </div>
     <div class="markdown">
       ${htmlContent}
@@ -1122,7 +1237,7 @@ app.get('/share/:code', async (req, res) => {
 // 首页
 app.get('/', (req, res) => {
   executeQuery(
-    'SELECT * FROM notes WHERE visibility = ? ORDER BY updated_at DESC LIMIT 10',
+    'SELECT * FROM notes WHERE visibility = ? ORDER BY updated_at DESC LIMIT 6',
     ['public']
   ).then(allNotes => {
     const notes = allNotes.map(note => ({
@@ -1145,6 +1260,7 @@ app.get('/', (req, res) => {
       color: #333;
       background: #f8f9fa;
       min-height: 100vh;
+      overflow-x: hidden;
     }
     .container {
       max-width: 1000px;
@@ -1313,6 +1429,31 @@ app.get('/', (req, res) => {
       color: #667eea;
       text-decoration: none;
     }
+    @media (max-width: 768px) {
+      .features {
+        grid-template-columns: 1fr;
+        gap: 15px;
+      }
+      .header h1 {
+        font-size: 2rem;
+      }
+      .header .tagline {
+        font-size: 1rem;
+      }
+      .container {
+        padding: 20px 15px;
+      }
+      .section {
+        padding: 25px 20px;
+      }
+      .note-card {
+        padding: 20px;
+      }
+      .note-meta {
+        flex-wrap: wrap;
+        gap: 10px;
+      }
+    }
   </style>
 </head>
 <body>
@@ -1430,8 +1571,9 @@ GET /note/:id</pre>
             <a href="/note/${note.id}" class="note-card">
               <div class="note-title">${note.title}</div>
               <div class="note-meta">
-                <span>📅 ${new Date(note.created_at).toLocaleDateString('zh-CN')}</span>
-                <span>✏️ ${note.metadata.author || 'Anonymous'}</span>
+                <span>📅 ${new Date(note.created_at).toLocaleDateString('zh-CN', { timeZone: 'Asia/Shanghai' })}</span>
+                ${note.metadata.recorded_by ? `<span>🤖 ${note.metadata.recorded_by}</span>` : `<span>✏️ ${note.metadata.author || 'Anonymous'}</span>`}
+                ${note.metadata.work_type ? `<span>${note.metadata.work_type}</span>` : ''}
               </div>
             </a>
           `).join('')}
