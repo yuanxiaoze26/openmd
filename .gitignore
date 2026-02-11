@@ -4,6 +4,8 @@ node_modules/
 # Environment
 .env
 .env.local
+.env.production
+.vmark/
 
 # IDE
 .vscode/
@@ -23,3 +25,4 @@ yarn-error.log*
 *.pid
 *.seed
 *.pid.lock
+.vercel

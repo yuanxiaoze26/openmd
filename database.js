@@ -3,7 +3,8 @@ const sqlite3 = require('sqlite3').verbose();
 const path = require('path');
 
 // 数据库配置
-const DB_TYPE = process.env.DB_TYPE || 'sqlite';
+// 修复环境变量中的换行符问题
+const DB_TYPE = (process.env.DB_TYPE || 'sqlite').trim();
 const dbPath = path.join(process.env.VERCEL ? '/tmp' : '.', 'openmd.db');
 
 // MySQL 连接池
@@ -13,11 +14,11 @@ let isInitialized = false;
 
 // MySQL 配置
 const mysqlConfig = {
-  host: process.env.DB_HOST || 'localhost',
-  port: parseInt(process.env.DB_PORT) || 3306,
-  user: process.env.DB_USER || 'root',
-  password: process.env.DB_PASSWORD || '',
-  database: process.env.DB_NAME || 'openmd',
+  host: (process.env.DB_HOST || 'localhost').trim(),
+  port: parseInt((process.env.DB_PORT || '3306').trim()),
+  user: (process.env.DB_USER || 'root').trim(),
+  password: (process.env.DB_PASSWORD || '').trim(),
+  database: (process.env.DB_NAME || 'openmd').trim(),
   waitForConnections: true,
   connectionLimit: 10,
   queueLimit: 0,
@@ -98,11 +99,16 @@ async function createMySqlTables() {
         title VARCHAR(500) NOT NULL,
         content TEXT NOT NULL,
         metadata JSON,
+        visibility ENUM('public', 'private', 'password') DEFAULT 'public',
+        password VARCHAR(255) NULL,
+        expires_at TIMESTAMP NULL,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
         FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE SET NULL,
         INDEX idx_user_id (user_id),
-        INDEX idx_updated_at (updated_at)
+        INDEX idx_updated_at (updated_at),
+        INDEX idx_visibility (visibility),
+        INDEX idx_expires_at (expires_at)
       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
     `);
 
@@ -150,6 +156,9 @@ function createSqliteTables(db) {
       title TEXT NOT NULL,
       content TEXT NOT NULL,
       metadata TEXT,
+      visibility TEXT DEFAULT 'public',
+      password TEXT,
+      expires_at DATETIME,
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
       updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
       FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE SET NULL
