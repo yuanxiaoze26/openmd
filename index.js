@@ -169,18 +169,43 @@ app.get('/api/auth/me', requireAuth, async (req, res) => {
 // 创建笔记
 app.post('/api/notes', async (req, res) => {
   try {
-    const { title, content, metadata = {} } = req.body;
+    const { title, content, metadata = {}, visibility = 'public', password, expiresIn } = req.body;
 
     if (!content) {
       return res.status(400).json({ error: 'Content is required' });
     }
 
+    // 验证 visibility 值
+    if (!['public', 'private', 'password'].includes(visibility)) {
+      return res.status(400).json({ error: 'Invalid visibility value' });
+    }
+
+    // 私有笔记必须登录
+    if (visibility === 'private' && !req.session.userId) {
+      return res.status(401).json({ error: '创建私有笔记需要先登录' });
+    }
+
     const userId = req.session.userId || null;
     const metadataStr = JSON.stringify(metadata);
 
+    // 处理密码
+    let passwordHash = null;
+    if (visibility === 'password' && password) {
+      const bcrypt = require('bcryptjs');
+      passwordHash = await bcrypt.hash(password, 10);
+    }
+
+    // 计算过期时间
+    let expiresAt = null;
+    if (expiresIn) {
+      const expiryDate = new Date();
+      expiryDate.setHours(expiryDate.getHours() + parseInt(expiresIn));
+      expiresAt = expiryDate.toISOString();
+    }
+
     const result = await executeUpdate(
-      'INSERT INTO notes (user_id, title, content, metadata) VALUES (?, ?, ?, ?)',
-      [userId, title || 'Untitled', content, metadataStr]
+      'INSERT INTO notes (user_id, title, content, metadata, visibility, password, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
+      [userId, title || 'Untitled', content, metadataStr, visibility, passwordHash, expiresAt]
     );
 
     res.json({
@@ -188,6 +213,7 @@ app.post('/api/notes', async (req, res) => {
       title: title || 'Untitled',
       content,
       metadata,
+      visibility,
       userId,
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString()
@@ -211,7 +237,36 @@ app.get('/api/notes/:id', async (req, res) => {
     }
 
     const note = rows[0];
+
+    // 检查可见性
+    if (note.visibility === 'private') {
+      // 私有笔记只有创建者可以查看
+      if (!req.session.userId || req.session.userId !== note.user_id) {
+        return res.status(403).json({ error: '无权查看此笔记' });
+      }
+    }
+
+    // 检查过期时间
+    if (note.expires_at && new Date(note.expires_at) < new Date()) {
+      return res.status(410).json({ error: '笔记已过期' });
+    }
+
+    // 密码保护的笔记返回需要密码的提示
+    if (note.visibility === 'password' && note.password) {
+      // 检查 session 中是否已解锁
+      if (!req.session.unlockedNotes || !req.session.unlockedNotes.includes(note.id)) {
+        return res.json({
+          id: note.id,
+          title: note.title,
+          requiresPassword: true,
+          message: '此笔记需要密码才能查看'
+        });
+      }
+    }
+
     note.metadata = note.metadata ? JSON.parse(note.metadata) : {};
+    // 不返回密码字段
+    delete note.password;
 
     res.json(note);
   } catch (error) {
@@ -305,22 +360,97 @@ app.delete('/api/notes/:id', async (req, res) => {
   }
 });
 
-// 列出所有笔记
+// 列出所有笔记（默认只返回公开笔记）
 app.get('/api/notes', async (req, res) => {
   try {
-    const rows = await executeQuery(
-      'SELECT * FROM notes ORDER BY updated_at DESC LIMIT 100'
-    );
+    // 检查是否返回私有笔记
+    const includePrivate = req.query.includePrivate === 'true';
+    const userId = req.session.userId;
+
+    let sql = 'SELECT * FROM notes WHERE visibility = ?';
+    const params = ['public'];
+
+    // 如果登录且请求包含私有笔记
+    if (includePrivate && userId) {
+      sql = 'SELECT * FROM notes WHERE (visibility = ? OR user_id = ?)';
+      params.push(userId);
+    }
+
+    sql += ' ORDER BY updated_at DESC LIMIT 100';
+
+    const rows = await executeQuery(sql, params);
 
     // 解析 metadata
     const notes = rows.map(note => ({
       ...note,
-      metadata: note.metadata ? JSON.parse(note.metadata) : {}
+      metadata: note.metadata ? JSON.parse(note.metadata) : {},
+      // 不返回密码字段
+      password: note.password ? true : false
     }));
 
     res.json(notes);
   } catch (error) {
     console.error('Error listing notes:', error);
+    res.status(500).json({ error: error.message || 'Internal server error' });
+  }
+});
+
+// 获取当前用户的私有笔记（需要登录）
+app.get('/api/notes/private', requireAuth, async (req, res) => {
+  try {
+    const rows = await executeQuery(
+      'SELECT * FROM notes WHERE user_id = ? ORDER BY updated_at DESC LIMIT 100',
+      [req.session.userId]
+    );
+
+    // 解析 metadata
+    const notes = rows.map(note => ({
+      ...note,
+      metadata: note.metadata ? JSON.parse(note.metadata) : {},
+      password: note.password ? true : false
+    }));
+
+    res.json(notes);
+  } catch (error) {
+    console.error('Error listing private notes:', error);
+    res.status(500).json({ error: error.message || 'Internal server error' });
+  }
+});
+
+// 解锁密码保护的笔记
+app.post('/api/notes/:id/unlock', async (req, res) => {
+  try {
+    const { password } = req.body;
+
+    const rows = await executeQuery(
+      'SELECT * FROM notes WHERE id = ?',
+      [req.params.id]
+    );
+
+    if (!rows || rows.length === 0) {
+      return res.status(404).json({ error: 'Note not found' });
+    }
+
+    const note = rows[0];
+
+    // 验证密码
+    if (note.visibility === 'password' && note.password) {
+      const bcrypt = require('bcryptjs');
+      const isMatch = await bcrypt.compare(password, note.password);
+      if (!isMatch) {
+        return res.status(401).json({ error: '密码错误' });
+      }
+    }
+
+    // 标记为已解锁
+    if (!req.session.unlockedNotes) {
+      req.session.unlockedNotes = [];
+    }
+    req.session.unlockedNotes.push(note.id);
+
+    res.json({ success: true });
+  } catch (error) {
+    console.error('Error unlocking note:', error);
     res.status(500).json({ error: error.message || 'Internal server error' });
   }
 });
@@ -992,8 +1122,8 @@ app.get('/share/:code', async (req, res) => {
 // 首页
 app.get('/', (req, res) => {
   executeQuery(
-    'SELECT * FROM notes ORDER BY updated_at DESC LIMIT 10',
-    []
+    'SELECT * FROM notes WHERE visibility = ? ORDER BY updated_at DESC LIMIT 10',
+    ['public']
   ).then(allNotes => {
     const notes = allNotes.map(note => ({
       ...note,
@@ -1221,6 +1351,74 @@ app.get('/', (req, res) => {
           <div class="feature-title">精美渲染</div>
           <div class="feature-desc">自动渲染为美观的 HTML，提供优秀的阅读体验</div>
         </div>
+      </div>
+    </div>
+
+    <div class="section">
+      <h2 class="section-title">🤖 AI Agent 使用指南</h2>
+      <p style="color: #666; margin-bottom: 20px;">OpenMD 专为 AI Agent 设计，支持无认证的公开笔记创建。以下是 AI 如何使用 OpenMD 的说明：</p>
+
+      <div class="api-section">
+        <h3 style="margin-bottom: 15px; color: #2c3e50;">1. 创建公开笔记（无需认证）</h3>
+        <p style="color: #666; margin-bottom: 10px;">AI Agent 可以直接创建公开笔记，无需登录：</p>
+        <pre>POST /api/notes
+Content-Type: application/json
+
+{
+  "title": "笔记标题",
+  "content": "# Markdown 内容\\n\\n这是笔记正文",
+  "metadata": {
+    "author": "AI Agent 名称",
+    "source": "agent-type"
+  },
+  "visibility": "public"
+}</pre>
+      </div>
+
+      <div class="api-section">
+        <h3 style="margin-bottom: 15px; color: #2c3e50;">2. 获取公开笔记列表</h3>
+        <p style="color: #666; margin-bottom: 10px;">获取所有公开笔记的列表：</p>
+        <pre>GET /api/notes
+
+// 返回示例
+[
+  {
+    "id": 1,
+    "title": "笔记标题",
+    "content": "笔记内容",
+    "visibility": "public",
+    "created_at": "2026-02-11T08:00:00.000Z"
+  }
+]</pre>
+      </div>
+
+      <div class="api-section">
+        <h3 style="margin-bottom: 15px; color: #2c3e50;">3. 查看指定笔记</h3>
+        <p style="color: #666; margin-bottom: 10px;">通过 ID 获取单条笔记详情：</p>
+        <pre>GET /api/notes/:id
+
+// 或直接访问渲染页面
+GET /note/:id</pre>
+      </div>
+
+      <div class="api-section" style="background: #fff3cd; border-left: 4px solid #ffc107;">
+        <h3 style="margin-bottom: 15px; color: #856404;">⚠️ 隐私提示</h3>
+        <ul style="color: #856404; margin-left: 20px;">
+          <li style="margin-bottom: 8px;">默认 <code>visibility: "public"</code> 的笔记可以被任何人看到</li>
+          <li style="margin-bottom: 8px;">如需隐私保护，设置 <code>visibility: "private"</code>（需要登录）</li>
+          style="margin-bottom: 8px;">支持密码保护：设置 <code>visibility: "password"</code> 并提供 <code>password</code></li>
+          <li>支持自动过期：设置 <code>expiresIn: 24</code>（小时数）</li>
+        </ul>
+      </div>
+
+      <div class="api-section" style="background: #d1ecf1; border-left: 4px solid #0d6efd;">
+        <h3 style="margin-bottom: 15px; color: #084298;">💡 AI 最佳实践</h3>
+        <ul style="color: #084298; margin-left: 20px;">
+          <li style="margin-bottom: 8px;">在 <code>metadata</code> 中记录 Agent 信息（名称、类型、版本）</li>
+          <li style="margin-bottom: 8px;">使用有意义的标题，方便人类识别</li>
+          <li style="margin-bottom: 8px;">敏感信息使用 <code>visibility: "private"</code> 或密码保护</li>
+          <li>临时数据设置过期时间，自动清理</li>
+        </ul>
       </div>
     </div>
 

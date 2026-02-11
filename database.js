@@ -99,11 +99,16 @@ async function createMySqlTables() {
         title VARCHAR(500) NOT NULL,
         content TEXT NOT NULL,
         metadata JSON,
+        visibility ENUM('public', 'private', 'password') DEFAULT 'public',
+        password VARCHAR(255) NULL,
+        expires_at TIMESTAMP NULL,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
         FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE SET NULL,
         INDEX idx_user_id (user_id),
-        INDEX idx_updated_at (updated_at)
+        INDEX idx_updated_at (updated_at),
+        INDEX idx_visibility (visibility),
+        INDEX idx_expires_at (expires_at)
       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
     `);
 
@@ -151,6 +156,9 @@ function createSqliteTables(db) {
       title TEXT NOT NULL,
       content TEXT NOT NULL,
       metadata TEXT,
+      visibility TEXT DEFAULT 'public',
+      password TEXT,
+      expires_at DATETIME,
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
       updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
       FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE SET NULL

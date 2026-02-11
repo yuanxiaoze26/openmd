@@ -1,0 +1,727 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>OpenMD 部署实战文档</title>
+  <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: 'Noto Sans SC', -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Microsoft YaHei', sans-serif;
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      color: #334155;
+      line-height: 1.7;
+      padding: 40px 20px;
+      min-height: 100vh;
+    }
+    .container {
+      max-width: 900px;
+      margin: 0 auto;
+      background: white;
+      border-radius: 16px;
+      box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+      overflow: hidden;
+    }
+    .header {
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      color: white;
+      padding: 48px 40px;
+      text-align: center;
+    }
+    .header h1 {
+      font-size: 36px;
+      font-weight: 700;
+      margin-bottom: 12px;
+      text-shadow: 0 2px 4px rgba(0,0,0,0.2);
+    }
+    .header .subtitle {
+      font-size: 18px;
+      opacity: 0.95;
+      margin-bottom: 8px;
+    }
+    .header .meta {
+      font-size: 14px;
+      opacity: 0.85;
+    }
+    .content { padding: 40px; }
+    h2 {
+      font-size: 24px;
+      font-weight: 600;
+      color: #1e293b;
+      margin-top: 40px;
+      margin-bottom: 20px;
+      padding-bottom: 12px;
+      border-bottom: 3px solid #667eea;
+    }
+    h3 {
+      font-size: 18px;
+      font-weight: 600;
+      color: #334155;
+      margin-top: 24px;
+      margin-bottom: 12px;
+    }
+    p { margin-bottom: 16px; font-size: 15px; }
+    ul, ol { margin-bottom: 16px; padding-left: 24px; }
+    li { margin-bottom: 8px; font-size: 15px; }
+    .feature-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+      gap: 16px;
+      margin: 24px 0;
+    }
+    .feature-card {
+      background: linear-gradient(135deg, #f0f9ff 0%, #e0f2fe 100%);
+      border: 1px solid #7dd3fc;
+      border-radius: 12px;
+      padding: 20px;
+    }
+    .feature-icon { font-size: 32px; margin-bottom: 8px; }
+    .feature-title {
+      font-weight: 600;
+      font-size: 16px;
+      color: #0c4a6e;
+      margin-bottom: 6px;
+    }
+    .feature-desc {
+      font-size: 14px;
+      color: #0369a1;
+      line-height: 1.5;
+    }
+    .tech-stack {
+      background: #f8fafc;
+      border: 1px solid #e2e8f0;
+      border-radius: 12px;
+      padding: 20px;
+      margin: 20px 0;
+    }
+    .tech-item {
+      display: flex;
+      align-items: center;
+      padding: 8px 0;
+      border-bottom: 1px solid #e2e8f0;
+    }
+    .tech-item:last-child { border-bottom: none; }
+    .tech-icon {
+      width: 32px;
+      height: 32px;
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      border-radius: 8px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: white;
+      font-weight: 600;
+      margin-right: 12px;
+      font-size: 14px;
+    }
+    .tech-name { font-weight: 600; color: #1e293b; flex: 1; }
+    .tech-desc { font-size: 13px; color: #64748b; }
+    .code-block {
+      background: #1e293b;
+      color: #e2e8f0;
+      border-radius: 8px;
+      padding: 20px;
+      margin: 16px 0;
+      overflow-x: auto;
+    }
+    .code-block code {
+      font-family: 'Monaco', 'Menlo', 'Consolas', monospace;
+      font-size: 13px;
+      line-height: 1.6;
+      white-space: pre;
+    }
+    .code-block .comment { color: #64748b; }
+    .code-block .keyword { color: #c084fc; }
+    .code-block .string { color: #86efac; }
+    .code-block .function { color: #60a5fa; }
+    .api-endpoint {
+      background: #f0fdf4;
+      border-left: 4px solid #22c55e;
+      border-radius: 8px;
+      padding: 16px 20px;
+      margin: 12px 0;
+    }
+    .api-method {
+      display: inline-block;
+      padding: 4px 12px;
+      border-radius: 4px;
+      font-weight: 700;
+      font-size: 12px;
+      margin-right: 8px;
+    }
+    .method-get { background: #3b82f6; color: white; }
+    .method-post { background: #22c55e; color: white; }
+    .method-put { background: #f59e0b; color: white; }
+    .method-delete { background: #ef4444; color: white; }
+    .api-url {
+      font-family: 'Monaco', 'Menlo', 'Consolas', monospace;
+      font-size: 14px;
+      color: #1e293b;
+    }
+    .api-desc {
+      font-size: 14px;
+      color: #475569;
+      margin-top: 8px;
+    }
+    .problem-card {
+      background: #fef2f2;
+      border: 1px solid #fca5a5;
+      border-radius: 12px;
+      padding: 20px;
+      margin: 16px 0;
+    }
+    .problem-title {
+      font-weight: 600;
+      color: #991b1b;
+      font-size: 16px;
+      margin-bottom: 8px;
+      display: flex;
+      align-items: center;
+    }
+    .problem-title::before {
+      content: "⚠️";
+      margin-right: 8px;
+    }
+    .solution-card {
+      background: #f0fdf4;
+      border: 1px solid #86efac;
+      border-radius: 12px;
+      padding: 20px;
+      margin: 12px 0;
+    }
+    .solution-title {
+      font-weight: 600;
+      color: #166534;
+      font-size: 16px;
+      margin-bottom: 8px;
+      display: flex;
+      align-items: center;
+    }
+    .solution-title::before {
+      content: "✅";
+      margin-right: 8px;
+    }
+    .env-table {
+      width: 100%;
+      border-collapse: collapse;
+      margin: 16px 0;
+      font-size: 14px;
+    }
+    .env-table th {
+      background: #f1f5f9;
+      padding: 12px;
+      text-align: left;
+      font-weight: 600;
+      color: #475569;
+      border-bottom: 2px solid #e2e8f0;
+    }
+    .env-table td {
+      padding: 12px;
+      border-bottom: 1px solid #e2e8f0;
+      color: #334155;
+    }
+    .env-table tr:hover { background: #f8fafc; }
+    .status-badge {
+      display: inline-block;
+      padding: 4px 12px;
+      border-radius: 20px;
+      font-size: 12px;
+      font-weight: 600;
+    }
+    .status-success { background: #dcfce7; color: #166534; }
+    .status-error { background: #fee2e2; color: #991b1b; }
+    .deployment-flow {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      background: #f8fafc;
+      border-radius: 12px;
+      padding: 24px;
+      margin: 20px 0;
+      flex-wrap: wrap;
+      gap: 16px;
+    }
+    .flow-step {
+      flex: 1;
+      min-width: 150px;
+      text-align: center;
+    }
+    .flow-icon {
+      width: 56px;
+      height: 56px;
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      margin: 0 auto 12px;
+      font-size: 24px;
+    }
+    .flow-title {
+      font-weight: 600;
+      color: #1e293b;
+      font-size: 14px;
+      margin-bottom: 4px;
+    }
+    .flow-desc {
+      font-size: 12px;
+      color: #64748b;
+    }
+    .flow-arrow {
+      font-size: 24px;
+      color: #94a3b8;
+    }
+    .best-practice {
+      background: linear-gradient(135deg, #fef3c7 0%, #fde68a 100%);
+      border: 1px solid #f59e0b;
+      border-radius: 12px;
+      padding: 20px;
+      margin: 16px 0;
+    }
+    .best-practice-title {
+      font-weight: 600;
+      color: #92400e;
+      font-size: 16px;
+      margin-bottom: 12px;
+      display: flex;
+      align-items: center;
+    }
+    .best-practice-title::before {
+      content: "💡";
+      margin-right: 8px;
+    }
+    .footer {
+      background: #f8fafc;
+      padding: 32px 40px;
+      text-align: center;
+      color: #64748b;
+      font-size: 14px;
+      border-top: 1px solid #e2e8f0;
+    }
+    .footer a {
+      color: #667eea;
+      text-decoration: none;
+      font-weight: 600;
+    }
+    .footer a:hover { text-decoration: underline; }
+    .copy-btn {
+      background: #667eea;
+      color: white;
+      border: none;
+      border-radius: 6px;
+      padding: 8px 16px;
+      font-size: 13px;
+      cursor: pointer;
+      margin-top: 8px;
+      transition: all 0.2s;
+    }
+    .copy-btn:hover { background: #5a67d8; transform: translateY(-1px); }
+    .copy-btn.copied { background: #22c55e; }
+    @media (max-width: 640px) {
+      .header { padding: 32px 20px; }
+      .header h1 { font-size: 28px; }
+      .content { padding: 24px 20px; }
+      .feature-grid { grid-template-columns: 1fr; }
+      .deployment-flow { flex-direction: column; }
+      .flow-arrow { transform: rotate(90deg); }
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+      <h1>🚀 OpenMD 部署实战文档</h1>
+      <p class="subtitle">AI 原生笔记工具的 Vercel Serverless 部署指南</p>
+      <p class="meta">2026-02-11 | 晓力 & Claude Code</p>
+    </div>
+
+    <div class="content">
+      <h2>📖 项目概述</h2>
+      <p>OpenMD 是一个专为 AI Agent 设计的笔记工具，支持 Markdown 原生格式、一键分享和精美的 HTML 渲染。本文档记录了从零开始部署 OpenMD 到 Vercel Serverless 环境的完整过程，包括遇到的问题、解决方案和最佳实践。</p>
+
+      <h3>核心特性</h3>
+      <div class="feature-grid">
+        <div class="feature-card">
+          <div class="feature-icon">🤖</div>
+          <div class="feature-title">Agent 优先</div>
+          <div class="feature-desc">专为 AI Agent 设计的 RESTful API</div>
+        </div>
+        <div class="feature-card">
+          <div class="feature-icon">📝</div>
+          <div class="feature-title">Markdown 原生</div>
+          <div class="feature-desc">完整支持 Markdown 语法</div>
+        </div>
+        <div class="feature-card">
+          <div class="feature-icon">🔗</div>
+          <div class="feature-title">一键分享</div>
+          <div class="feature-desc">支持密码保护和过期时间</div>
+        </div>
+        <div class="feature-card">
+          <div class="feature-icon">🎨</div>
+          <div class="feature-title">精美渲染</div>
+          <div class="feature-desc">自动渲染为美观的 HTML</div>
+        </div>
+      </div>
+
+      <h2>🏗️ 技术架构</h2>
+      <div class="tech-stack">
+        <div class="tech-item">
+          <div class="tech-icon">N</div>
+          <div class="tech-name">Node.js + Express</div>
+          <div class="tech-desc">轻量级服务器框架</div>
+        </div>
+        <div class="tech-item">
+          <div class="tech-icon">M</div>
+          <div class="tech-name">MySQL</div>
+          <div class="tech-desc">阿里云 RDS 数据库</div>
+        </div>
+        <div class="tech-item">
+          <div class="tech-icon">V</div>
+          <div class="tech-name">Vercel</div>
+          <div class="tech-desc">Serverless 部署平台</div>
+        </div>
+        <div class="tech-item">
+          <div class="tech-icon">S</div>
+          <div class="tech-name">express-session</div>
+          <div class="tech-desc">Session 管理</div>
+        </div>
+      </div>
+
+      <h3>部署架构流程</h3>
+      <div class="deployment-flow">
+        <div class="flow-step">
+          <div class="flow-icon">📝</div>
+          <div class="flow-title">代码开发</div>
+          <div class="flow-desc">本地开发调试</div>
+        </div>
+        <div class="flow-arrow">→</div>
+        <div class="flow-step">
+          <div class="flow-icon">📦</div>
+          <div class="flow-title">Git 推送</div>
+          <div class="flow-desc">myfork 分支</div>
+        </div>
+        <div class="flow-arrow">→</div>
+        <div class="flow-step">
+          <div class="flow-icon">🚀</div>
+          <div class="flow-title">Vercel CLI</div>
+          <div class="flow-desc">触发部署</div>
+        </div>
+        <div class="flow-arrow">→</div>
+        <div class="flow-step">
+          <div class="flow-icon">🌐</div>
+          <div class="flow-title">生产环境</div>
+          <div class="flow-desc">md.yuanze.com</div>
+        </div>
+      </div>
+
+      <h2>⚙️ 环境变量配置</h2>
+      <p>在 Vercel 项目中需要配置以下环境变量（所有环境：Production、Preview、Development）：</p>
+      <table class="env-table">
+        <thead>
+          <tr>
+            <th>变量名</th>
+            <th>值</th>
+            <th>说明</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>DB_TYPE</code></td>
+            <td><code>mysql</code></td>
+            <td>数据库类型</td>
+          </tr>
+          <tr>
+            <td><code>DB_HOST</code></td>
+            <td><code>182.92.238.143</code></td>
+            <td>MySQL 主机地址</td>
+          </tr>
+          <tr>
+            <td><code>DB_PORT</code></td>
+            <td><code>9001</code></td>
+            <td>MySQL 端口</td>
+          </tr>
+          <tr>
+            <td><code>DB_NAME</code></td>
+            <td><code>openmd</code></td>
+            <td>数据库名称</td>
+          </tr>
+          <tr>
+            <td><code>DB_USER</code></td>
+            <td><code>openmd</code></td>
+            <td>数据库用户名</td>
+          </tr>
+          <tr>
+            <td><code>DB_PASSWORD</code></td>
+            <td><code>***</code></td>
+            <td>数据库密码</td>
+          </tr>
+          <tr>
+            <td><code>SESSION_SECRET</code></td>
+            <td><code>***</code></td>
+            <td>Session 加密密钥</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h2>🔥 部署过程与问题解决</h2>
+
+      <div class="problem-card">
+        <div class="problem-title">问题 1：Serverless Function 崩溃 (500 错误)</div>
+        <p>部署后访问网站出现 <code>FUNCTION_INVOCATION_FAILED</code> 错误，日志显示函数崩溃。</p>
+      </div>
+
+      <div class="solution-card">
+        <div class="solution-title">解决方案：安装缺失依赖</div>
+        <p>错误原因是 <code>express-mysql-session</code> 依赖未安装。在 package.json 中添加依赖并重新安装：</p>
+        <div class="code-block">
+          <code><span class="comment"># 安装 MySQL Session Store 依赖</span>
+npm install express-mysql-session</code>
+        </div>
+      </div>
+
+      <div class="problem-card">
+        <div class="problem-title">问题 2：Session Store 配置错误</div>
+        <p>代码总是尝试创建 MySQLStore，但在非 MySQL 环境下会失败。</p>
+      </div>
+
+      <div class="solution-card">
+        <div class="solution-title">解决方案：动态选择 Session Store</div>
+        <p>根据 DB_TYPE 环境变量动态选择合适的 Session Store：</p>
+        <div class="code-block">
+          <code><span class="keyword">const</span> <span class="function">DB_TYPE</span> = (process.env.DB_TYPE || <span class="string">'sqlite'</span>).<span class="function">trim</span>();
+
+<span class="keyword">let</span> sessionStore;
+
+<span class="keyword">if</span> (DB_TYPE === <span class="string">'mysql'</span>) {
+  <span class="comment">// MySQL 模式：使用 MySQLStore 持久化 session</span>
+  <span class="keyword">const</span> sessionStoreOptions = {
+    host: process.env.DB_HOST,
+    port: process.env.DB_PORT,
+    user: process.env.DB_USER,
+    password: process.env.DB_PASSWORD,
+    database: process.env.DB_NAME,
+    createDatabaseTable: <span class="keyword">true</span>,
+    expiration: <span class="number">7</span> * <span class="number">24</span> * <span class="number">60</span> * <span class="number">60</span> * <span class="number">1000</span>
+  };
+  sessionStore = <span class="keyword">new</span> <span class="function">MySQLStore</span>(sessionStoreOptions);
+} <span class="keyword">else</span> {
+  <span class="comment">// SQLite 模式：使用 MemoryStore</span>
+  sessionStore = <span class="keyword">new</span> <span class="function">session.MemoryStore</span>();
+}</code>
+        </div>
+        <button class="copy-btn" onclick="copyCode(this)">复制代码</button>
+      </div>
+
+      <div class="problem-card">
+        <div class="problem-title">问题 3：环境变量包含换行符</div>
+        <p>通过 <code>echo "value" > file</code> 创建环境变量时，echo 默认添加换行符，导致 <code>DB_TYPE</code> 的值是 <code>"mysql\n"</code> 而不是 <code>"mysql"</code>。</p>
+        <p>症状：调试 API 显示 <code>DB_TYPE: "mysql\n"</code>，导致条件判断 <code>DB_TYPE === 'mysql'</code> 永远失败，数据库总是回退到 SQLite。</p>
+      </div>
+
+      <div class="solution-card">
+        <div class="solution-title">解决方案：使用 trim() 处理环境变量</div>
+        <p>在代码中对所有环境变量使用 <code>.trim()</code> 去除首尾空白字符：</p>
+        <div class="code-block">
+          <code><span class="comment">// 修复环境变量换行符问题</span>
+<span class="keyword">const</span> <span class="function">DB_TYPE</span> = (process.env.DB_TYPE || <span class="string">'sqlite'</span>).<span class="function">trim</span>();
+<span class="keyword">const</span> <span class="function">DB_HOST</span> = (process.env.DB_HOST || <span class="string">'localhost'</span>).<span class="function">trim</span>();
+<span class="keyword">const</span> <span class="function">DB_PORT</span> = <span class="function">parseInt</span>((process.env.DB_PORT || <span class="string">'3306'</span>).<span class="function">trim</span>());
+<span class="keyword">const</span> <span class="function">DB_USER</span> = (process.env.DB_USER || <span class="string">'root'</span>).<span class="function">trim</span>();
+<span class="keyword">const</span> <span class="function">DB_PASSWORD</span> = (process.env.DB_PASSWORD || <span class="string">''</span>).<span class="function">trim</span>();
+<span class="keyword">const</span> <span class="function">DB_NAME</span> = (process.env.DB_NAME || <span class="string">'openmd'</span>).<span class="function">trim</span>();</code>
+        </div>
+        <button class="copy-btn" onclick="copyCode(this)">复制代码</button>
+      </div>
+
+      <div class="problem-card">
+        <div class="problem-title">问题 4：Vercel 环境变量未配置</div>
+        <p>部署后应用仍然使用默认配置，环境变量没有生效。</p>
+      </div>
+
+      <div class="solution-card">
+        <div class="solution-title">解决方案：使用 Vercel CLI 配置环境变量</div>
+        <p>通过 Vercel CLI 为所有环境（Production、Preview、Development）添加环境变量：</p>
+        <div class="code-block">
+          <code><span class="comment"># 使用 Vercel Token 登录</span>
+npx vercel login --token &lt;YOUR_TOKEN&gt;
+
+<span class="comment"># 创建临时文件存储变量值（避免换行符）</span>
+<span class="function">printf</span> <span class="string">"mysql"</span> > /tmp/vercel_env.txt
+
+<span class="comment"># 为所有环境添加变量</span>
+npx vercel env add DB_TYPE production < /tmp/vercel_env.txt
+npx vercel env add DB_TYPE preview < /tmp/vercel_env.txt
+npx vercel env add DB_TYPE development < /tmp/vercel_env.txt
+
+<span class="comment"># 验证环境变量</span>
+npx vercel env ls</code>
+        </div>
+        <button class="copy-btn" onclick="copyCode(this)">复制代码</button>
+      </div>
+
+      <h2>📡 API 接口文档</h2>
+
+      <div class="api-endpoint">
+        <div>
+          <span class="api-method method-post">POST</span>
+          <span class="api-url">/api/notes</span>
+        </div>
+        <div class="api-desc">创建新笔记</div>
+        <div class="code-block" style="margin-top: 12px;">
+          <code>curl -X POST https://md.yuanze.com/api/notes \
+  -H <span class="string">"Content-Type: application/json"</span> \
+  -d <span class="string">'{
+    "title": "我的笔记",
+    "content": "# Hello World\n\n这是笔记内容",
+    "metadata": {"author": "Claude"}
+  }'</span></code>
+        </div>
+      </div>
+
+      <div class="api-endpoint">
+        <div>
+          <span class="api-method method-get">GET</span>
+          <span class="api-url">/api/notes</span>
+        </div>
+        <div class="api-desc">获取所有笔记列表</div>
+        <div class="code-block" style="margin-top: 12px;">
+          <code>curl https://md.yuanze.com/api/notes</code>
+        </div>
+      </div>
+
+      <div class="api-endpoint">
+        <div>
+          <span class="api-method method-get">GET</span>
+          <span class="api-url">/api/notes/:id</span>
+        </div>
+        <div class="api-desc">获取指定笔记详情</div>
+      </div>
+
+      <div class="api-endpoint">
+        <div>
+          <span class="api-method method-put">PUT</span>
+          <span class="api-url">/api/notes/:id</span>
+        </div>
+        <div class="api-desc">更新笔记内容</div>
+      </div>
+
+      <div class="api-endpoint">
+        <div>
+          <span class="api-method method-delete">DELETE</span>
+          <span class="api-url">/api/notes/:id</span>
+        </div>
+        <div class="api-desc">删除笔记</div>
+      </div>
+
+      <div class="api-endpoint">
+        <div>
+          <span class="api-method method-get">GET</span>
+          <span class="api-url">/api/health</span>
+        </div>
+        <div class="api-desc">健康检查（查看数据库连接状态）</div>
+        <div class="code-block" style="margin-top: 12px;">
+          <code><span class="comment"># 响应示例</span>
+{
+  <span class="string">"status"</span>: <span class="string">"healthy"</span>,
+  <span class="string">"database"</span>: <span class="string">"openmd"</span>,
+  <span class="string">"host"</span>: <span class="string">"182.92.238.143"</span>,
+  <span class="string">"port"</span>: <span class="number">9001</span>
+}</code>
+        </div>
+      </div>
+
+      <h2>💡 最佳实践与经验总结</h2>
+
+      <div class="best-practice">
+        <div class="best-practice-title">环境变量处理</div>
+        <p><strong>始终使用 .trim() 处理环境变量</strong></p>
+        <p>在 Vercel CLI 环境中，环境变量可能包含不可见的换行符。在代码中对所有环境变量使用 <code>.trim()</code> 可以避免很多难以调试的问题。</p>
+        <div class="code-block">
+          <code><span class="comment">// ✅ 好的做法</span>
+<span class="keyword">const</span> <span class="function">DB_TYPE</span> = (process.env.DB_TYPE || <span class="string">'sqlite'</span>).<span class="function">trim</span>();
+
+<span class="comment">// ❌ 不好的做法</span>
+<span class="keyword">const</span> <span class="function">DB_TYPE</span> = process.env.DB_TYPE || <span class="string">'sqlite'</span>;</code>
+        </div>
+      </div>
+
+      <div class="best-practice">
+        <div class="best-practice-title">Vercel 部署验证</div>
+        <p><strong>部署前验证环境变量完整性</strong></p>
+        <p>在部署前使用 <code>npx vercel env ls</code> 确认所有必需的环境变量都已配置。使用调试 API（如 <code>/api/debug/env</code>）验证运行时环境变量是否正确加载。</p>
+      </div>
+
+      <div class="best-practice">
+        <div class="best-practice-title">Session 管理策略</div>
+        <p><strong>Serverless 环境必须使用持久化 Session 存储</strong></p>
+        <p>Vercel Serverless 环境中，MemoryStore 会导致 session 丢失。必须使用 MySQL Store 或其他持久化存储方案来保持用户登录状态。</p>
+      </div>
+
+      <div class="best-practice">
+        <div class="best-practice-title">渐进式调试</div>
+        <p><strong>添加调试接口，逐步验证</strong></p>
+        <p>当遇到部署问题时，添加 <code>/api/debug</code> 端点来检查环境变量、数据库连接等，逐步定位问题根源。不要猜测，要验证。</p>
+      </div>
+
+      <h2>✅ 部署验证清单</h2>
+      <ul>
+        <li><span class="status-badge status-success">✓</span> 健康检查接口返回 MySQL 连接正常</li>
+        <li><span class="status-badge status-success">✓</span> 创建笔记功能正常</li>
+        <li><span class="status-badge status-success">✓</span> 获取笔记列表正常</li>
+        <li><span class="status-badge status-success">✓</span> 更新笔记功能正常</li>
+        <li><span class="status-badge status-success">✓</span> 删除笔记功能正常</li>
+        <li><span class="status-badge status-success">✓</span> 笔记页面渲染正常</li>
+        <li><span class="status-badge status-success">✓</span> Session 持久化正常</li>
+      </ul>
+
+      <h2>🌐 访问地址</h2>
+      <ul>
+        <li><strong>生产环境</strong>: <a href="https://md.yuanze.com" target="_blank">https://md.yuanze.com</a></li>
+        <li><strong>Vercel 域名</strong>: <a href="https://openmd-github.vercel.app" target="_blank">https://openmd-github.vercel.app</a></li>
+        <li><strong>GitHub 仓库</strong>: <a href="https://github.com/yuanxiaoze26/openmd" target="_blank">https://github.com/yuanxiaoze26/openmd</a></li>
+      </ul>
+
+      <h2>📚 技术要点回顾</h2>
+      <ol>
+        <li><strong>依赖管理</strong>: 确保 package.json 中包含所有必需依赖</li>
+        <li><strong>环境配置</strong>: 使用 Vercel CLI 为所有环境配置变量</li>
+        <li><strong>数据清洗</strong>: 对所有环境变量使用 <code>.trim()</code> 处理</li>
+        <li><strong>Session 存储</strong>: Serverless 环境必须使用持久化存储</li>
+        <li><strong>调试方法</strong>: 添加调试接口，逐步验证问题</li>
+        <li><strong>部署验证</strong>: 部署后验证所有功能正常工作</li>
+      </ol>
+
+      <p style="margin-top: 32px; padding: 20px; background: #f0f9ff; border-radius: 8px; border-left: 4px solid #0ea5e9;">
+        <strong>🎯 总结</strong><br>
+        OpenMD 项目展示了 AI Agent 与传统 Web 开发的完美结合。通过 Vercel Serverless 和 MySQL 的组合，实现了一个高性能、可扩展的笔记系统。部署过程中遇到的环境变量、Session 存储、依赖管理等问题都是 Serverless 部署的典型场景，解决方案可以为类似项目提供参考。
+      </p>
+    </div>
+
+    <div class="footer">
+      <p>📝 部署日期: 2026-02-11 | 技术栈: Node.js + Express + MySQL + Vercel</p>
+      <p>👥 团队: 晓力 & Claude Code | 状态: <span class="status-badge status-success">✓ 生产环境运行中</span></p>
+      <p style="margin-top: 16px;">
+        <a href="https://md.yuanze.com" target="_blank">访问生产环境</a> |
+        <a href="https://github.com/yuanxiaoze26/openmd" target="_blank">GitHub 仓库</a>
+      </p>
+    </div>
+  </div>
+
+  <script>
+    function copyCode(btn) {
+      const codeBlock = btn.previousElementSibling;
+      const code = codeBlock.textContent;
+      navigator.clipboard.writeText(code).then(() => {
+        const originalText = btn.textContent;
+        btn.textContent = '已复制！';
+        btn.classList.add('copied');
+        setTimeout(() => {
+          btn.textContent = originalText;
+          btn.classList.remove('copied');
+        }, 2000);
+      });
+    }
+  </script>
+</body>
+</html>
