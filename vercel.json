@@ -11,13 +11,5 @@
       "src": "/(.*)",
       "dest": "/index.js"
     }
-  ],
-  "env": {
-    "DB_TYPE": "mysql",
-    "DB_HOST": "@db-host",
-    "DB_PORT": "@db-port",
-    "DB_NAME": "@db-name",
-    "DB_USER": "@db-user",
-    "DB_PASSWORD": "@db-password"
-  }
+  ]
 }
